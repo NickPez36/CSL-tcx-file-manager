@@ -1,1 +1,551 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TCX File Manager & Converter</title>
+    <!-- Load Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Load Inter font -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+    <!-- Load SheetJS for XLSX generation -->
+    <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+        .data-table-container {
+            max-height: 500px; /* Limit height of the preview table */
+            overflow: auto;
+        }
+    </style>
+</head>
+<body class="bg-gray-100 min-h-screen p-4 sm:p-8">
 
+    <div class="max-w-7xl mx-auto bg-white shadow-xl rounded-xl p-6 sm:p-10">
+        <header class="mb-8 border-b pb-4">
+            <h1 class="text-3xl font-bold text-gray-800">TCX Data Manager</h1>
+            <p class="text-gray-500">Select a training period and a TCX file to preview and download data in various formats.</p>
+        </header>
+
+        <!-- The Configuration Section div has been removed -->
+
+        <!-- Selection and Preview Layout -->
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
+            <!-- File Selection Panel (Left Column) -->
+            <div class="lg:col-span-1 space-y-6">
+                
+                <!-- Folder Selection -->
+                <div class="p-5 bg-white border border-gray-200 rounded-lg shadow-sm">
+                    <label for="folder-select" class="block text-sm font-medium text-gray-700 mb-2">1. Select Training Period (Folder)</label>
+                    <select id="folder-select" class="mt-1 block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm rounded-md bg-white disabled:opacity-50">
+                        <option value="" disabled selected>Loading folders...</option>
+                    </select>
+                    <p id="folder-status" class="mt-2 text-xs text-gray-500"></p>
+                </div>
+
+                <!-- File Selection -->
+                <div class="p-5 bg-white border border-gray-200 rounded-lg shadow-sm">
+                    <label for="file-select" class="block text-sm font-medium text-gray-700 mb-2">2. Select TCX File</label>
+                    <select id="file-select" class="mt-1 block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm rounded-md bg-white disabled:opacity-50" disabled>
+                        <option value="" disabled selected>Select a folder first</option>
+                    </select>
+                    <p id="file-status" class="mt-2 text-xs text-gray-500">Ready for file selection.</p>
+                </div>
+
+                <!-- Download Options -->
+                <div id="download-options" class="p-5 bg-white border border-gray-200 rounded-lg shadow-sm hidden">
+                    <h3 class="text-sm font-medium text-gray-700 mb-3">3. Download Selected File</h3>
+                    <div class="grid grid-cols-3 gap-3">
+                        <button id="download-csv" class="format-btn bg-indigo-500 hover:bg-indigo-600 text-white font-semibold py-2 px-4 rounded-lg shadow-md transition-colors text-sm">
+                            .CSV
+                        </button>
+                        <button id="download-xlsx" class="format-btn bg-green-500 hover:bg-green-600 text-white font-semibold py-2 px-4 rounded-lg shadow-md transition-colors text-sm">
+                            .XLSX
+                        </button>
+                        <button id="download-json" class="format-btn bg-blue-500 hover:bg-blue-600 text-white font-semibold py-2 px-4 rounded-lg shadow-md transition-colors text-sm">
+                            .JSON
+                        </button>
+                    </div>
+                    <p class="mt-3 text-xs text-gray-500 text-center">Downloads data as a flat list of trackpoints.</p>
+                </div>
+
+                <!-- Custom Message Box for Errors/Notifications -->
+                <div id="message-box" class="hidden p-4 rounded-lg text-sm transition-all duration-300"></div>
+
+            </div>
+
+            <!-- Data Preview Panel (Right Column) -->
+            <div class="lg:col-span-2 space-y-4">
+                <h2 class="text-xl font-semibold text-gray-800">Data Preview (Trackpoints)</h2>
+                
+                <div id="preview-container" class="data-table-container bg-gray-50 border border-gray-300 rounded-lg shadow-inner w-full">
+                    <p class="p-4 text-gray-500 text-center">Select a file from the left to view data.</p>
+                    <table id="data-table" class="min-w-full divide-y divide-gray-200 hidden">
+                        <thead class="bg-gray-200 sticky top-0">
+                            <tr id="table-header"></tr>
+                        </thead>
+                        <tbody id="table-body" class="bg-white divide-y divide-gray-100">
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+    </div>
+
+    <script>
+        // --- Configuration ---
+        const GH_USER = 'NickPez36';
+        const GH_REPO = 'CSL-tcx-file-manager';
+        const GH_DATA_PATH = 'data';
+        const GH_BASE_URL = `https://api.github.com/repos/${GH_USER}/${GH_REPO}/contents/${GH_DATA_PATH}`;
+        const API_DELAY = 2000; // Delay for error messages
+        let parsedData = []; // Global store for the parsed data array
+
+        // --- DOM Elements ---
+        const folderSelect = document.getElementById('folder-select');
+        const fileSelect = document.getElementById('file-select');
+        const folderStatus = document.getElementById('folder-status');
+        const fileStatus = document.getElementById('file-status');
+        const previewContainer = document.getElementById('preview-container');
+        const dataTable = document.getElementById('data-table');
+        const tableHeader = document.getElementById('table-header');
+        const tableBody = document.getElementById('table-body');
+        const downloadOptions = document.getElementById('download-options');
+        const messageBox = document.getElementById('message-box');
+
+        // --- Helper Functions ---
+
+        /** Displays a temporary message in the message box. */
+        function showMessage(message, type = 'info') {
+            const colors = {
+                info: 'bg-blue-100 text-blue-700 border-blue-400',
+                error: 'bg-red-100 text-red-700 border-red-400',
+                success: 'bg-green-100 text-green-700 border-green-400'
+            };
+            messageBox.className = `p-4 rounded-lg text-sm transition-all duration-300 border ${colors[type]}`;
+            messageBox.innerHTML = message;
+            messageBox.classList.remove('hidden');
+
+            setTimeout(() => {
+                messageBox.classList.add('hidden');
+            }, API_DELAY * 2);
+        }
+
+        /** Clears the preview table. */
+        function clearPreview() {
+            dataTable.classList.add('hidden');
+            previewContainer.innerHTML = '<p class="p-4 text-gray-500 text-center">Select a file from the left to view data.</p>';
+            downloadOptions.classList.add('hidden');
+            parsedData = [];
+        }
+
+        /** Fetches data from GitHub API. This is only used for listing directories (JSON response). */
+        async function fetchGitHubData(url, errorMessage) {
+            try {
+                const response = await fetch(url);
+                if (!response.ok) {
+                    throw new Error(`GitHub API Error: ${response.status} ${response.statusText}`);
+                }
+                return await response.json();
+            } catch (error) {
+                console.error(error);
+                showMessage(`${errorMessage}: ${error.message}`, 'error');
+                return null;
+            }
+        }
+        
+        /**
+         * Helper to safely extract a numeric or string value by tag name.
+         * Uses getElementsByTagName which is more robust to XML namespaces than querySelector.
+         * @param {Element} parent - The parent element (e.g., Trackpoint).
+         * @param {string} tagName - The tag name to find (e.g., 'AltitudeMeters').
+         * @param {boolean} isNumeric - Whether to parse as float.
+         * @returns {string|number|null}
+         */
+        function extractValue(parent, tagName, isNumeric = true) {
+            // getElementsByTagName is generally better for namespace-agnostic search in XML/TCX
+            const nodes = parent.getElementsByTagName(tagName);
+            if (nodes.length > 0) {
+                const text = nodes[0].textContent;
+                if (text) {
+                    return isNumeric ? parseFloat(text) : text;
+                }
+            }
+            return null;
+        }
+
+        // --- Core Logic: Data Cleaning ---
+        
+        /**
+         * Cleans flatline data streaks (where a value gets stuck during rest)
+         * by setting subsequent points in a streak (longer than the threshold) to 0.
+         * The first point of the streak is preserved.
+         * @param {Array<Object>} dataArray - The array of trackpoint objects.
+         * @param {string} fieldKey - The key for the field to clean ('Watts', 'Speed', or 'Cadence').
+         */
+        function cleanFlatlineData(dataArray, fieldKey) {
+            // Threshold: If a value repeats for more than this number of points, it's considered a flatline rest artifact.
+            // Using 5 points (approx 5 seconds for 1Hz data) as the threshold, as implied by the user's mock code.
+            const flatlineThreshold = 5; 
+
+            for (let i = 0; i < dataArray.length; i++) {
+                const startValue = dataArray[i][fieldKey];
+                
+                // Only process if the starting value is a positive number
+                if (typeof startValue !== 'number' || startValue <= 0) continue;
+
+                let streakEndIndex = i + 1;
+                
+                // Find the end of the streak of identical values
+                while (streakEndIndex < dataArray.length && dataArray[streakEndIndex][fieldKey] === startValue) {
+                    streakEndIndex++;
+                }
+                
+                const streakLength = streakEndIndex - i;
+                
+                // If the streak is longer than the threshold, clean the values
+                if (streakLength > flatlineThreshold) {
+                    // Start cleaning from the second point (i + 1) up to the end of the streak (streakEndIndex - 1)
+                    for (let j = i + 1; j < streakEndIndex; j++) {
+                        dataArray[j][fieldKey] = 0; 
+                    }
+                    // Skip the index 'i' to the end of the streak since it's already processed
+                    i = streakEndIndex - 1; 
+                }
+            }
+        }
+
+        // --- Core Logic: TCX Parsing ---
+
+        /**
+         * Converts TCX XML content into a flat array of trackpoint objects.
+         * Now uses explicit namespace prefixes (ns3:) for Speed and Watts.
+         * @param {string} xmlString - The raw XML content of the TCX file.
+         * @returns {Array<Object>} An array of structured data objects.
+         */
+        function parseTcx(xmlString) {
+            const parser = new DOMParser();
+            const xmlDoc = parser.parseFromString(xmlString, "text/xml");
+            
+            const trackpoints = xmlDoc.getElementsByTagName('Trackpoint');
+            const data = [];
+
+            // Define the fields to extract (excluding nested HR and Extensions)
+            const fieldDefinitions = [
+                { key: 'Time', tag: 'Time', numeric: false },
+                { key: 'Latitude', tag: 'LatitudeDegrees', numeric: true },
+                { key: 'Longitude', tag: 'LongitudeDegrees', numeric: true },
+                { key: 'Altitude', tag: 'AltitudeMeters', numeric: true },
+                { key: 'Distance', tag: 'DistanceMeters', numeric: true },
+                // Speed is defined here, but its value is prioritized from the extension below
+                { key: 'Speed', tag: 'Speed', numeric: true }, 
+                { key: 'Cadence', tag: 'Cadence', numeric: true },
+            ];
+            
+            for (let i = 0; i < trackpoints.length; i++) {
+                const trackpoint = trackpoints[i];
+                const row = {};
+                
+                // 1. Extract Standard Fields
+                fieldDefinitions.forEach(f => {
+                    row[f.key] = extractValue(trackpoint, f.tag, f.numeric);
+                });
+
+                // 2. Extract Nested Heart Rate (HeartRateBpm -> Value)
+                let hrBpm = null;
+                const hrNodes = trackpoint.getElementsByTagName('HeartRateBpm');
+                if (hrNodes.length > 0) {
+                    hrBpm = extractValue(hrNodes[0], 'Value', true);
+                }
+                row['HeartRateBpm'] = hrBpm;
+
+                // 3. Extract Extension Fields (ns3:Watts and ns3:Speed)
+                // We must use the 'ns3:TagName' pattern due to the namespace prefix shown in your data snippet.
+                let watts = null;
+                let speedExtension = null;
+
+                const extensions = trackpoint.getElementsByTagName('Extensions');
+                if (extensions.length > 0) {
+                    const extensionContainer = extensions[0];
+                    
+                    // Search for Watts (ns3:Watts)
+                    const wattsNodes = extensionContainer.getElementsByTagName('ns3:Watts');
+                    if (wattsNodes.length > 0) {
+                        watts = parseFloat(wattsNodes[0].textContent);
+                    }
+
+                    // Search for Speed (ns3:Speed)
+                    const speedExtensionNodes = extensionContainer.getElementsByTagName('ns3:Speed');
+                    if (speedExtensionNodes.length > 0) {
+                        speedExtension = parseFloat(speedExtensionNodes[0].textContent);
+                    }
+                }
+
+                // Prioritize extension data if found
+                row['Watts'] = watts; 
+                if (speedExtension !== null) {
+                    row['Speed'] = speedExtension; 
+                }
+                // If speedExtension is null, the value from the standard 'Speed' tag (if it existed) remains.
+
+                data.push(row);
+            }
+
+            if (data.length === 0) {
+                return null;
+            }
+
+            return data;
+        }
+
+        /** Renders the parsed data array into the HTML table. */
+        function renderPreview(data) {
+            if (!data || data.length === 0) {
+                clearPreview();
+                previewContainer.innerHTML = '<p class="p-4 text-gray-500 text-center">No trackpoints found in the selected file.</p>';
+                return;
+            }
+
+            // 1. Get Headers from the first object
+            const headers = Object.keys(data[0]);
+
+            // 2. Render Table Header
+            tableHeader.innerHTML = '';
+            tableHeader.innerHTML = headers.map(h => `<th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">${h}</th>`).join('');
+
+            // 3. Render Table Body (only first 100 rows for performance)
+            tableBody.innerHTML = '';
+            const maxRows = Math.min(data.length, 100);
+            
+            for (let i = 0; i < maxRows; i++) {
+                const row = data[i];
+                const tr = document.createElement('tr');
+                tr.className = i % 2 === 0 ? 'bg-white' : 'bg-gray-50';
+                tr.innerHTML = headers.map(h => {
+                    const value = row[h] !== null && typeof row[h] !== 'undefined' ? row[h] : '-';
+                    return `<td class="px-4 py-2 whitespace-nowrap text-sm text-gray-800">${value}</td>`;
+                }).join('');
+                tableBody.appendChild(tr);
+            }
+
+            // Show table and download options
+            dataTable.classList.remove('hidden');
+            previewContainer.innerHTML = ''; // Clear initial message
+            previewContainer.appendChild(dataTable);
+            downloadOptions.classList.remove('hidden');
+
+            // Add note about truncation
+            if (data.length > maxRows) {
+                const note = document.createElement('p');
+                note.className = 'p-4 text-xs text-center text-indigo-600 bg-indigo-50 rounded-b-lg';
+                note.textContent = `Displaying the first ${maxRows} of ${data.length} total trackpoints. All data will be included in the download.`;
+                previewContainer.appendChild(note);
+            }
+        }
+
+
+        // --- Download Functions ---
+
+        /** Triggers a browser download for the given content. */
+        function downloadFile(content, fileName, mimeType) {
+            const blob = new Blob([content], { type: mimeType });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = fileName;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        }
+
+        // CSV Download
+        document.getElementById('download-csv').addEventListener('click', () => {
+            if (parsedData.length === 0) return showMessage('No data parsed to download.', 'error');
+            const fileName = fileSelect.options[fileSelect.selectedIndex].text.replace('.tcx', '.csv');
+            const worksheet = XLSX.utils.json_to_sheet(parsedData);
+            const csv = XLSX.utils.sheet_to_csv(worksheet);
+            downloadFile(csv, fileName, 'text/csv');
+            showMessage(`Downloaded ${fileName}`, 'success');
+        });
+
+        // XLSX Download
+        document.getElementById('download-xlsx').addEventListener('click', () => {
+            if (parsedData.length === 0) return showMessage('No data parsed to download.', 'error');
+            const fileName = fileSelect.options[fileSelect.selectedIndex].text.replace('.tcx', '.xlsx');
+            
+            // Create a new workbook
+            const workbook = XLSX.utils.book_new();
+            
+            // Convert JSON array to worksheet
+            const worksheet = XLSX.utils.json_to_sheet(parsedData);
+
+            // Add the worksheet to the workbook
+            XLSX.utils.book_append_sheet(workbook, worksheet, "Trackpoints");
+            
+            // Write workbook to a binary file and trigger download
+            XLSX.writeFile(workbook, fileName);
+
+            showMessage(`Downloaded ${fileName}`, 'success');
+        });
+
+        // JSON Download
+        document.getElementById('download-json').addEventListener('click', () => {
+            if (parsedData.length === 0) return showMessage('No data parsed to download.', 'error');
+            const fileName = fileSelect.options[fileSelect.selectedIndex].text.replace('.tcx', '.json');
+            const jsonString = JSON.stringify(parsedData, null, 2);
+            downloadFile(jsonString, fileName, 'application/json');
+            showMessage(`Downloaded ${fileName}`, 'success');
+        });
+
+
+        // --- Event Handlers ---
+
+        /** Handles folder selection change. */
+        folderSelect.addEventListener('change', async () => {
+            const folderName = folderSelect.value;
+            if (!folderName) return;
+
+            fileSelect.innerHTML = '<option value="" disabled selected>Loading files...</option>';
+            fileSelect.disabled = true;
+            fileStatus.textContent = `Fetching files in ${folderName}...`;
+            clearPreview();
+
+            await loadFiles(folderName);
+        });
+
+        /** Handles file selection change. */
+        fileSelect.addEventListener('change', async () => {
+            // Get the value (GitHub download URL) from the currently selected option
+            const selectedOption = fileSelect.options[fileSelect.selectedIndex];
+            const filePath = selectedOption ? selectedOption.value : null;
+
+            // Check if a valid file URL was selected.
+            if (!filePath || selectedOption.disabled) {
+                fileStatus.textContent = 'Ready for file selection.';
+                clearPreview();
+                return;
+            }
+            
+            fileStatus.textContent = `Fetching raw file: ${selectedOption.text}...`;
+            clearPreview();
+
+            let tcxContent = null;
+            
+            try {
+                // Fetch the raw XML content
+                const response = await fetch(filePath);
+                
+                if (!response.ok) {
+                    throw new Error(`Failed to download raw file. Status: ${response.status}`);
+                }
+                
+                // Read response as plain text (XML)
+                tcxContent = await response.text();
+                
+            } catch (e) {
+                console.error("File Fetch Error:", e);
+                showMessage(`Failed to download file. This could be due to network issues or an invalid file path. Error: ${e.message}`, 'error');
+                fileStatus.textContent = 'Ready for file selection.';
+                return; 
+            }
+
+            // --- Parsing Block ---
+            if (tcxContent) {
+                try {
+                    parsedData = parseTcx(tcxContent);
+                    
+                    if (parsedData) {
+                        // --- Data Cleaning Step ---
+                        // Apply cleaning logic to remove flatline artifacts from the three specified fields
+                        cleanFlatlineData(parsedData, 'Watts');
+                        cleanFlatlineData(parsedData, 'Speed');
+                        cleanFlatlineData(parsedData, 'Cadence');
+                        // --- End Data Cleaning Step ---
+
+                        renderPreview(parsedData);
+                        fileStatus.textContent = `File successfully parsed and cleaned. Total trackpoints: ${parsedData.length}`;
+                    } else {
+                        // This handles the case where parseTcx returns null (i.e., no trackpoints found)
+                        showMessage('TCX file was retrieved but contains no usable trackpoint data.', 'error');
+                        fileStatus.textContent = 'Ready for file selection.';
+                    }
+
+                } catch (e) {
+                    console.error("Parsing Error:", e);
+                    showMessage(`Parsing failed for the selected file. The TCX content may be malformed. Error: ${e.message}`, 'error');
+                    fileStatus.textContent = 'Ready for file selection.';
+                }
+            } else {
+                 showMessage('File content was empty or could not be read.', 'error');
+                 fileStatus.textContent = 'Ready for file selection.';
+            }
+        });
+
+
+        // --- Initialization Functions ---
+
+        /** Loads the list of TCX files for a selected folder. */
+        async function loadFiles(folderName) {
+            const url = `${GH_BASE_URL}/${folderName}`;
+            const contents = await fetchGitHubData(url, 'Failed to list files in folder');
+
+            fileSelect.innerHTML = '<option value="" disabled selected>Select a TCX file</option>';
+            
+            if (contents && Array.isArray(contents)) {
+                const tcxFiles = contents.filter(item => item.type === 'file' && item.name.endsWith('.tcx'));
+
+                if (tcxFiles.length > 0) {
+                    tcxFiles.forEach(file => {
+                        const option = document.createElement('option');
+                        // Use download_url instead of url to bypass 1MB API limit
+                        option.value = file.download_url; 
+                        option.textContent = file.name;
+                        fileSelect.appendChild(option);
+                    });
+                    fileSelect.disabled = false;
+                    fileStatus.textContent = `Found ${tcxFiles.length} TCX files.`;
+                } else {
+                    fileStatus.textContent = 'No TCX files found in this folder.';
+                }
+            } else {
+                fileStatus.textContent = 'Error loading file list.';
+            }
+        }
+
+        /** Loads the initial list of sub-folders in the 'data' directory. */
+        async function loadFolders() {
+            folderStatus.textContent = 'Connecting to GitHub...';
+            folderSelect.disabled = true;
+            
+            const contents = await fetchGitHubData(GH_BASE_URL, 'Failed to list data directory contents');
+
+            folderSelect.innerHTML = '<option value="" disabled selected>Select a Training Period</option>';
+
+            if (contents && Array.isArray(contents)) {
+                // Filter for directories (sub-folders)
+                const folders = contents.filter(item => item.type === 'dir');
+                
+                if (folders.length > 0) {
+                    folders.forEach(folder => {
+                        const option = document.createElement('option');
+                        option.value = folder.name;
+                        option.textContent = folder.name;
+                        folderSelect.appendChild(option);
+                    });
+                    folderSelect.disabled = false;
+                    folderStatus.textContent = `Found ${folders.length} training periods.`;
+                } else {
+                    folderStatus.textContent = 'No sub-folders found in the /data directory.';
+                }
+            } else {
+                fileStatus.textContent = 'Error loading folders. Check repository path or GitHub rate limits.';
+            }
+        }
+
+        // --- Execute Initialization ---
+        document.addEventListener('DOMContentLoaded', loadFolders);
+
+    </script>
+</body>
+</html>
