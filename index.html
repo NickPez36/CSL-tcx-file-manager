@@ -186,7 +186,7 @@
         function cleanFlatlineData(dataArray, fieldKey) {
             // Threshold: If a value repeats for more than this number of points, it's considered a flatline rest artifact.
             // Using 5 points (approx 5 seconds for 1Hz data) as the threshold, as implied by the user's mock code.
-            const flatlineThreshold = 5; 
+            const flatlineThreshold = 10; 
 
             for (let i = 0; i < dataArray.length; i++) {
                 const startValue = dataArray[i][fieldKey];
